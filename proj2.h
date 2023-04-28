@@ -19,6 +19,7 @@
 
 #define ARGCOUNT 6
 
+#define ANY -1
 #define NONE 0
 #define Z_STARTED 1
 #define Z_GOING_HOME 2

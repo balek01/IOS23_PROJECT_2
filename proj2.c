@@ -36,6 +36,7 @@ Service service3;
 FILE *file;
 bool *post_open;
 int *action_id;
+int seed;
 
 Arg ParseArgs(int argc, char *const argv[])
 {
@@ -44,9 +45,7 @@ Arg ParseArgs(int argc, char *const argv[])
 
     // Check argument count
     if (argc != ARGCOUNT)
-    {
         exit_error("Incorrect argument count.", 1);
-    }
 
     // Check if argument is digit
     for (int i = 1; i < argc; i++)
@@ -56,7 +55,6 @@ Arg ParseArgs(int argc, char *const argv[])
         {
             if (isdigit(str[i]) == 0)
             {
-                printf("covole: %c", str[i]);
                 exit_error("Some of provided arguments are not positive numbers.", 1);
             }
         }
@@ -68,17 +66,13 @@ Arg ParseArgs(int argc, char *const argv[])
     args.F = atoi(argv[5]);
 
     if (!((0 <= args.TZ && args.TZ <= 10000) && (0 <= args.F && args.F <= 10000)))
-    {
         exit_error("TZ or F values are not in range(0 <= arg <= 10000).", 1);
-    }
+
     if (args.NU < 1)
-    {
         exit_error("NU must be bigger then 0", 1);
-    }
+
     if (!(0 <= args.TU && args.TU <= 100))
-    {
         exit_error("TU value are not in range (0 <= TU <= 100).", 1);
-    }
 
     return args;
 }
@@ -93,50 +87,43 @@ void customer_wait_to_be_called(int id, int service)
 {
     if (service == 1)
     {
-        // wait_sem(&(service1.queue));
+        wait_sem(&(service1.queue));
         output(Z_CALLED_BY_WORKER, id, service);
-        usleep_random_in_range(0, 10);
-        customer_go_home(id);
     }
     else if (service == 2)
     {
-        // wait_sem(&(service2.queue));
+        //  wait_sem(&(service2.queue));
         output(Z_CALLED_BY_WORKER, id, service);
-        usleep_random_in_range(0, 10);
-        customer_go_home(id);
     }
     else if (service == 3)
     {
         // wait_sem(&(service3.queue));
         output(Z_CALLED_BY_WORKER, id, service);
-        usleep_random_in_range(0, 10);
-        customer_go_home(id);
     }
+
+    usleep_random_in_range(0, 10);
+    customer_go_home(id);
 }
+
 void customer_queue_up(int id)
 {
-    int rand_service = random_int(1, 3);
+    // TODO fix ti 1-3 debug
+    int rand_service = random_int(1, 1);
     output(Z_ENTERING_OFFICE, id, rand_service);
+    wait_sem(&mutex_queue_update);
     if (rand_service == 1)
-    {
-        wait_sem(&mutex_queue_update);
         (*(service1.count))++;
-        post_sem(&mutex_queue_update);
-    }
-    else if (rand_service == 2)
-    {
-        wait_sem(&mutex_queue_update);
+
+    if (rand_service == 2)
         (*(service2.count))++;
-        post_sem(&mutex_queue_update);
-    }
-    else if (rand_service == 3)
-    {
-        wait_sem(&mutex_queue_update);
+
+    if (rand_service == 3)
         (*(service3.count))++;
-        post_sem(&mutex_queue_update);
-    }
+
+    post_sem(&mutex_queue_update);
     customer_wait_to_be_called(id, rand_service);
 }
+
 void customer(Arg args, int id)
 {
     // U started
@@ -157,12 +144,70 @@ void customer(Arg args, int id)
     exit(0);
 }
 
+bool check_any_customer(int service)
+{
+    bool result = true;
+    wait_sem(&mutex_queue_update);
+    if (service == ANY)
+    {
+        if (*(service1.count) == 0 && *(service2.count) == 0 && *(service3.count) == 0)
+        {
+            result = false;
+        }
+    }
+    else if (service == 1 && *(service1.count) == 0)
+    {
+        result = false;
+    }
+    else if (service == 2 && *(service2.count) == 0)
+    {
+        result = false;
+    }
+    else if (service == 3 && *(service3.count) == 0)
+    {
+        result = false;
+    }
+
+    post_sem(&mutex_queue_update);
+
+    return result;
+}
 void postman(Arg args, int id)
 {
     // U started
     output(U_STARTED, id, NONE);
-    int rand_service = random_int(0, 333);
-    output(U_SERVING_SERVICE, id, rand_service);
+    // TODO deleto u sleep debug
+    usleep(6666);
+    if (check_any_customer(ANY))
+    {
+        output(DEBUG, id, ANY);
+        int rand_service;
+        bool finding_queue = check_any_customer(ANY);
+        if (finding_queue)
+        {
+
+            while (finding_queue)
+            {
+
+                rand_service = random_int(1, 3);
+                // TODO delete debug
+                output(DEBUG, id, rand_service);
+                finding_queue = !check_any_customer(rand_service);
+            }
+        }
+
+        wait_sem(&mutex_queue_update);
+        (*(service2.count))--;
+        post_sem(&mutex_queue_update);
+        output(U_SERVING_SERVICE, id, rand_service);
+        post_sem(&(service1.queue));
+    }
+    else
+    {
+        // TODO deleto debug
+        output(DEBUG, id, NONE);
+        // TODO: no customer left
+    }
     // U sleep
     usleep_random_in_range(0, args.TZ);
     output(U_GOING_HOME, id, NONE);
@@ -225,7 +270,6 @@ void output(int action_type, int id, int service)
 
 void customer_go_home(int id)
 {
-
     output(Z_GOING_HOME, id, NONE);
     exit(0);
 }
@@ -296,20 +340,18 @@ void cleanup_semaphores()
     destroy_sem(&service2.queue);
     destroy_sem(&service3.queue);
     if (munmap(post_open, sizeof(bool)) == -1)
-
         exit_error("Munmap sem failed.", 1);
 
     if (munmap(action_id, sizeof(int)) == -1)
-
         exit_error("Munmap sem failed.", 1);
+
     if (munmap(service1.count, sizeof(int)) == -1)
-
         exit_error("Munmap sem failed.", 1);
+
     if (munmap(service2.count, sizeof(int)) == -1)
-
         exit_error("Munmap sem failed.", 1);
-    if (munmap(service3.count, sizeof(int)) == -1)
 
+    if (munmap(service3.count, sizeof(int)) == -1)
         exit_error("Munmap sem failed.", 1);
 }
 
@@ -325,7 +367,8 @@ void init_sem(sem_t **sem, int value)
 
 int random_int(int lower, int upper)
 {
-    int seed = getpid();
+    seed += getpid() * 3696;
+
     srand(seed);
     // generate random integer in the range <lower, upper>
     return (int)rand() % (upper - lower + 1) + lower;
@@ -372,29 +415,20 @@ int main(int argc, char *const argv[])
         pid_t customer_id = fork();
 
         if (customer_id < 0)
-        {
             exit_error("Fork failed.", 1);
-        }
 
         if (customer_id == 0)
-        {
             customer(args, i);
-        }
     }
 
     for (int i = 1; i < args.NU + 1; i++)
     {
         pid_t postman_id = fork();
-
         if (postman_id < 0)
-        {
             exit_error("Fork postman failed.", 1);
-        }
 
         if (postman_id == 0)
-        {
-            // postman(args, i);
-        }
+            postman(args, i);
     }
 
     usleep_random_in_range((int)args.F / 2, args.F);
@@ -403,9 +437,7 @@ int main(int argc, char *const argv[])
     while (wait(NULL) > 0)
         ;
     if (fclose(file) == EOF)
-    {
         exit_error("Final fclose close.", 1);
-    }
 
     cleanup_semaphores();
     return 0;
