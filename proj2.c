@@ -107,9 +107,9 @@ void customer_wait_to_be_called(int id, int service)
 
 void customer_queue_up(int id)
 {
-    // TODO fix ti 1-3 debug
-    int rand_service = random_int(1, 1);
+    int rand_service = random_int(1, 3);
     output(Z_ENTERING_OFFICE, id, rand_service);
+    post_sem(&mutex_post_status);
     wait_sem(&mutex_queue_update);
     if (rand_service == 1)
         (*(service1.count))++;
@@ -121,6 +121,7 @@ void customer_queue_up(int id)
         (*(service3.count))++;
 
     post_sem(&mutex_queue_update);
+
     customer_wait_to_be_called(id, rand_service);
 }
 
@@ -132,12 +133,12 @@ void customer(Arg args, int id)
     usleep_random_in_range(0, args.TZ);
     // if post is closed go home
     wait_sem(&mutex_post_status);
-    if (!post_open)
+    if (!*post_open)
     {
         post_sem(&mutex_post_status);
         customer_go_home(id);
     }
-    post_sem(&mutex_post_status);
+
     // else continue
     customer_queue_up(id);
 
@@ -147,7 +148,7 @@ void customer(Arg args, int id)
 bool check_any_customer(int service)
 {
     bool result = true;
-    wait_sem(&mutex_queue_update);
+
     if (service == ANY)
     {
         if (*(service1.count) == 0 && *(service2.count) == 0 && *(service3.count) == 0)
@@ -168,56 +169,76 @@ bool check_any_customer(int service)
         result = false;
     }
 
-    post_sem(&mutex_queue_update);
-
     return result;
 }
 void postman(Arg args, int id)
 {
     // U started
-    output(U_STARTED, id, NONE);
-    // TODO deleto u sleep debug
-    usleep(6666);
+
+    wait_sem(&mutex_queue_update);
     if (check_any_customer(ANY))
     {
-        output(DEBUG, id, ANY);
+
         int rand_service;
-        bool finding_queue = check_any_customer(ANY);
-        if (finding_queue)
+        bool finding_queue = true;
+
+        while (finding_queue)
         {
-
-            while (finding_queue)
-            {
-
-                rand_service = random_int(1, 3);
-                // TODO delete debug
-                output(DEBUG, id, rand_service);
-                finding_queue = !check_any_customer(rand_service);
-            }
+            rand_service = random_int(1, 3);
+            finding_queue = !check_any_customer(rand_service);
         }
 
-        wait_sem(&mutex_queue_update);
-        (*(service2.count))--;
+        if (rand_service == 1)
+        {
+
+            (*(service1.count))--;
+            post_sem(&(service1.queue));
+        }
+        else if (rand_service == 2)
+        {
+
+            (*(service2.count))--;
+            post_sem(&(service2.queue));
+        }
+        else if (rand_service == 3)
+        {
+
+            (*(service3.count))--;
+            post_sem(&(service3.queue));
+        }
+
+                output(U_SERVING_SERVICE, id, rand_service);
         post_sem(&mutex_queue_update);
-        output(U_SERVING_SERVICE, id, rand_service);
-        post_sem(&(service1.queue));
     }
     else
     {
-        // TODO deleto debug
-        output(DEBUG, id, NONE);
-        // TODO: no customer left
+        wait_sem(&mutex_post_status);
+        if (*post_open)
+        {
+            post_sem(&mutex_queue_update);
+            output(U_BREAK, id, NONE);
+            post_sem(&mutex_post_status);
+            usleep_random_in_range(0, args.TU);
+            output(U_BREAK_FINISHED, id, NONE);
+        }
+        else if (!(*post_open))
+        {
+            output(U_GOING_HOME, id, NONE);
+            post_sem(&mutex_queue_update);
+            post_sem(&mutex_post_status);
+
+            exit(0);
+        }
     }
-    // U sleep
-    usleep_random_in_range(0, args.TZ);
-    output(U_GOING_HOME, id, NONE);
-    exit(0);
+
+    postman(args, id);
 }
 
 void change_post_status()
 {
     wait_sem(&mutex_post_status);
     *post_open = !*post_open;
+    output(CLOSING, NONE, NONE);
     post_sem(&mutex_post_status);
 }
 
@@ -258,6 +279,9 @@ void output(int action_type, int id, int service)
     case U_GOING_HOME:
         fprintf(file, "%d: U %d: going home\n", *action_id, id);
         break;
+    case CLOSING:
+        fprintf(file, "%d: closing\n", *action_id);
+        break;
     case DEBUG:
         fprintf(file, "%d: ID %d: Debug %d\n", *action_id, id, service);
         break;
@@ -270,6 +294,7 @@ void output(int action_type, int id, int service)
 
 void customer_go_home(int id)
 {
+
     output(Z_GOING_HOME, id, NONE);
     exit(0);
 }
@@ -370,8 +395,10 @@ int random_int(int lower, int upper)
     seed += getpid() * 3696;
 
     srand(seed);
+    int randn = (int)rand() % (upper - lower + 1) + lower;
+
     // generate random integer in the range <lower, upper>
-    return (int)rand() % (upper - lower + 1) + lower;
+    return randn;
 }
 void usleep_random_in_range(int lower, int upper)
 {
@@ -406,16 +433,16 @@ int main(int argc, char *const argv[])
     Arg args = ParseArgs(argc, argv);
     init_semaphores();
     clear_and_open_output_file();
+    setbuf(file, NULL);
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
-    setbuf(file, NULL);
 
     for (int i = 1; i < args.NZ + 1; i++)
     {
         pid_t customer_id = fork();
 
         if (customer_id < 0)
-            exit_error("Fork failed.", 1);
+            exit_error("Fork customer failed.", 1);
 
         if (customer_id == 0)
             customer(args, i);
@@ -428,11 +455,15 @@ int main(int argc, char *const argv[])
             exit_error("Fork postman failed.", 1);
 
         if (postman_id == 0)
+        {
+            output(U_STARTED, i, NONE);
             postman(args, i);
+        }
     }
 
     usleep_random_in_range((int)args.F / 2, args.F);
-    change_post_status(true);
+    change_post_status();
+
     // wait for all procceses to finish
     while (wait(NULL) > 0)
         ;

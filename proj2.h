@@ -32,7 +32,8 @@
 #define U_BREAK 8
 #define U_BREAK_FINISHED 9
 #define U_GOING_HOME 10
-#define DEBUG 11
+#define CLOSING 11
+#define DEBUG 12
 
 typedef struct
 {
@@ -70,4 +71,5 @@ void clear_and_open_output_file();
 void output(int action_type, int id, int service);
 void usleep_random_in_range(int lower, int upper);
 int random_int(int lower, int upper);
+void customer_queue_up(int id);
 #endif
